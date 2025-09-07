@@ -20,7 +20,6 @@ def _read_text_utf8(path: Path) -> str:
 # ------------------ config ------------------
 
 def load_config(path: str | Path) -> dict:
-    """Load YAML config with safer path resolution (works on Streamlit Cloud)."""
     p = Path(path)
 
     # If relative path, try resolving it
@@ -328,4 +327,5 @@ class StreamSimulator:
             "now": self.now,
             "flags_df": log_df.sort_values("time", ascending=False).head(500)
         }
+
 
