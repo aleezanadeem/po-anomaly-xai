@@ -1,0 +1,11 @@
+[
+  "duration_s",
+  "ct_gr_ir_s",
+  "ct_ir_ci_s",
+  "ct_gr_ci_s",
+  "count_GR",
+  "count_IR",
+  "count_CI",
+  "count_cancel_delete",
+  "rework_immediate"
+]

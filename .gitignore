@@ -1,0 +1,12 @@
+# Ignore everything
+*
+
+# Keep demo folder
+!demo/
+!demo/**
+
+# Keep helper files
+!.gitignore
+!README.md
+!requirements.txt
+!make_demo_folder.py
