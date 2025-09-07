@@ -1,7 +1,5 @@
 streamlit
 pandas
 numpy
-altair
 pyyaml
-torch
-scikit-learn
+altair
