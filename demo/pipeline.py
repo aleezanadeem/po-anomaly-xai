@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import annotations
+rom __future__ import annotations
 import json, time, math, random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -20,9 +20,27 @@ def _read_text_utf8(path: Path) -> str:
 # ------------------ config ------------------
 
 def load_config(path: str | Path) -> dict:
+    """Load YAML config with safer path resolution (works on Streamlit Cloud)."""
     p = Path(path)
+
+    # If relative path, try resolving it
+    if not p.is_absolute():
+        # try relative to CWD (repo root)
+        cwd_try = Path.cwd() / p
+        if cwd_try.exists():
+            p = cwd_try
+        else:
+            # try relative to this file (demo/pipeline.py)
+            here_try = Path(__file__).parent / p
+            if here_try.exists():
+                p = here_try
+
     if not p.exists():
-        raise FileNotFoundError(f"config not found: {p}")
+        raise FileNotFoundError(
+            f"config not found: {p.resolve()} "
+            f"(cwd={Path.cwd()}, __file__={__file__})"
+        )
+
     return yaml.safe_load(_read_text_utf8(p))
 
 # ------------------ data store ------------------
@@ -310,3 +328,4 @@ class StreamSimulator:
             "now": self.now,
             "flags_df": log_df.sort_values("time", ascending=False).head(500)
         }
+
