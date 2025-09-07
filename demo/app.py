@@ -17,7 +17,7 @@ st.set_page_config(page_title="P2P Real-time Compliance & Anomaly Dashboard",
                    page_icon="⚡", layout="wide")
 
 # --------- sidebar: config + controls ---------
-cfg_path = st.sidebar.text_input("Config path", "deployment/config.yaml")
+cfg_path = st.sidebar.text_input("Config path", "config.yaml")
 if "cfg" not in st.session_state or st.session_state.get("cfg_path") != cfg_path:
     st.session_state.cfg = load_config(cfg_path)
     st.session_state.cfg_path = cfg_path
@@ -379,3 +379,4 @@ if auto:
             st.rerun()
         except Exception:
             pass
+
