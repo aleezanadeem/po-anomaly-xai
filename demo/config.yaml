@@ -1,18 +1,21 @@
 data:
-  events_parquet: demo\data\processed\events_clean.parquet
-  cases_parquet: demo\data\processed\cases_clean.parquet
-  features_parquet: demo\data\processed\features\case_features.parquet
-  labels_parquet: demo\data\processed\labels\compliance_labels.parquet
+  events_parquet: demo/data/processed/events_clean.parquet
+  cases_parquet: demo/data/processed/cases_clean.parquet
+  features_parquet: demo/data/processed/features/case_features.parquet
+  labels_parquet: demo/data/processed/labels/compliance_labels.parquet
+
 model:
   kind: bvae
-  weights: demo\artifacts\models\bvae\bvae.pt
-  scaler: demo\artifacts\models\bvae\scaler.json
-  features_used: demo\artifacts\models\bvae\features_used.json
-  scores_test: demo\artifacts\models\bvae\scores_test.csv
-  scores_val: demo\artifacts\models\bvae\scores_val.csv
-  scores_train: demo\artifacts\models\bvae\scores_train.csv
+  weights: demo/artifacts/models/bvae/bvae.pt
+  scaler: demo/artifacts/models/bvae/scaler.json
+  features_used: demo/artifacts/models/bvae/features_used.json
+  scores_test: demo/artifacts/models/bvae/scores_test.csv
+  scores_val: demo/artifacts/models/bvae/scores_val.csv
+  scores_train: demo/artifacts/models/bvae/scores_train.csv
+
 encoders:
-  activities: demo\artifacts\encoders\activities.json
+  activities: demo/artifacts/encoders/activities.json
+
 runtime:
   anomaly_threshold: 0.85
   stream_step_events: 200
