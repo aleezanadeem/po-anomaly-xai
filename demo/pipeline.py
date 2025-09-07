@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-rom __future__ import annotations
-import json, time, math, random
+from __future__ import annotations
+import json, time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -11,7 +10,7 @@ import yaml
 # ------------------ helpers ------------------
 
 def _read_text_utf8(path: Path) -> str:
-    """Read text as UTF-8 with BOM fallback to avoid Windows cp1252 decode errors."""
+    """Read text as UTF-8 with BOM fallback (Windows-safe)."""
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -20,16 +19,20 @@ def _read_text_utf8(path: Path) -> str:
 # ------------------ config ------------------
 
 def load_config(path: str | Path) -> dict:
+    """
+    Load YAML config, making sure relative paths inside demo/ work
+    both locally and on Streamlit Cloud.
+    """
     p = Path(path)
 
-    # If relative path, try resolving it
+    # If not absolute, first check repo root
     if not p.is_absolute():
-        # try relative to CWD (repo root)
+        # Try relative to CWD (repo root)
         cwd_try = Path.cwd() / p
         if cwd_try.exists():
             p = cwd_try
         else:
-            # try relative to this file (demo/pipeline.py)
+            # Try relative to this file (demo/)
             here_try = Path(__file__).parent / p
             if here_try.exists():
                 p = here_try
@@ -57,8 +60,7 @@ class DataStore:
     def events(self) -> pd.DataFrame:
         if self._events is None:
             df = pd.read_parquet(self.cfg["data"]["events_parquet"])
-            # required cols: case_id, activity, timestamp
-            need = {"case_id","activity","timestamp"}
+            need = {"case_id", "activity", "timestamp"}
             if not need.issubset(df.columns):
                 raise KeyError(f"events parquet must contain {need}")
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
@@ -70,14 +72,12 @@ class DataStore:
     def cases(self) -> pd.DataFrame:
         if self._cases is None:
             c = pd.read_parquet(self.cfg["data"]["cases_parquet"])
-            # ensure datetimes
-            for col in ["start_ts","end_ts"]:
+            for col in ["start_ts", "end_ts"]:
                 if col in c.columns:
                     c[col] = pd.to_datetime(c[col], utc=True, errors="coerce")
-            # for convenience
             if "amount_eur" not in c.columns:
                 if "amount" in c.columns:
-                    c = c.rename(columns={"amount":"amount_eur"})
+                    c = c.rename(columns={"amount": "amount_eur"})
                 else:
                     c["amount_eur"] = np.nan
             self._cases = c.set_index("case_id", drop=False)
@@ -93,7 +93,7 @@ class DataStore:
     @property
     def labels(self) -> Optional[pd.DataFrame]:
         if self._labels is None:
-            p = Path(self.cfg["data"].get("labels_parquet",""))
+            p = Path(self.cfg["data"].get("labels_parquet", ""))
             if p.exists():
                 self._labels = pd.read_parquet(p)
                 if "case_id" in self._labels.columns:
@@ -101,7 +101,7 @@ class DataStore:
         return self._labels
 
     @property
-    def activity_vocab(self) -> Dict[str,str]:
+    def activity_vocab(self) -> Dict[str, str]:
         if self._activity_vocab is None:
             p = Path(self.cfg["encoders"]["activities"])
             if p.exists():
@@ -114,36 +114,32 @@ class DataStore:
 
 class RuleEngine:
     """
-    Minimal online rules:
+    Minimal compliance rules:
       - IR before GR
       - Payment before GR
-      - Missing CI (decided at case end)
+      - Missing CI
     """
-    def __init__(self, activity_vocab: Dict[str,str]):
-        self.tag = {}  # full activity -> tag in {"GR","IR","CI","PAY","OTHER"}
+    def __init__(self, activity_vocab: Dict[str, str]):
+        self.tag = {}
         for k, v in activity_vocab.items():
             lab = str(v).upper()
             if "GOODS" in lab and "RECEIPT" in lab: self.tag[k] = "GR"
-            elif "INVOICE RECEIPT" in lab or "RECORD INVOICE RECEIPT" in lab: self.tag[k] = "IR"
+            elif "INVOICE RECEIPT" in lab: self.tag[k] = "IR"
             elif "CLEAR INVOICE" in lab: self.tag[k] = "CI"
-            elif "REMOVE PAYMENT BLOCK" in lab or "PAYMENT" in lab: self.tag[k] = "PAY"
+            elif "PAYMENT" in lab: self.tag[k] = "PAY"
         self._state: Dict[str, Dict] = {}
 
     def update(self, case_id: str, activity: str, ts: pd.Timestamp) -> List[Tuple[str, pd.Timestamp]]:
-        st = self._state.setdefault(case_id, {"seen": set(), "first_ts": {}, "flags": []})
+        st = self._state.setdefault(case_id, {"seen": set(), "flags": []})
         tag = self.tag.get(activity)
         st["seen"].add(tag or "OTHER")
-        if tag and tag not in st["first_ts"]:
-            st["first_ts"][tag] = ts
-
         fired = []
         if "IR" in st["seen"] and "GR" not in st["seen"]:
-            if not any(code == "IR_BEFORE_GR" for code,_ in st["flags"]):
+            if not any(code == "IR_BEFORE_GR" for code, _ in st["flags"]):
                 fired.append(("IR_BEFORE_GR", ts))
         if "PAY" in st["seen"] and "GR" not in st["seen"]:
-            if not any(code == "PAY_BEFORE_GR" for code,_ in st["flags"]):
+            if not any(code == "PAY_BEFORE_GR" for code, _ in st["flags"]):
                 fired.append(("PAY_BEFORE_GR", ts))
-
         st["flags"].extend(fired)
         return fired
 
@@ -162,11 +158,10 @@ class RuleEngine:
 
 def _safe_float_array(x):
     x = np.asarray(x, dtype=np.float32)
-    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    return x
+    return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
 class ScoreProvider:
-    """Try real BVAE first; otherwise fall back to precomputed scores lookup."""
+    """Try BVAE if available, otherwise fallback to precomputed scores."""
     def __init__(self, cfg: dict, features_df: pd.DataFrame):
         self.cfg = cfg
         self.features_df = features_df
@@ -177,7 +172,7 @@ class ScoreProvider:
 
         try:
             import torch
-            from poetl.model_bvae_44 import BVAE  # training module
+            from poetl.model_bvae_44 import BVAE
 
             feat_names = json.loads(_read_text_utf8(Path(cfg["model"]["features_used"])))
             scaler = json.loads(_read_text_utf8(Path(cfg["model"]["scaler"])))
@@ -198,24 +193,21 @@ class ScoreProvider:
     def _load_scores_lookup(self):
         if self._scores_lookup is None:
             scores = []
-            for k in ["scores_train","scores_val","scores_test"]:
+            for k in ["scores_train", "scores_val", "scores_test"]:
                 p = Path(self.cfg["model"].get(k, ""))
                 if p.exists():
                     df = pd.read_csv(p)
-                    if {"case_id","score"}.issubset(df.columns):
-                        scores.append(df[["case_id","score"]])
+                    if {"case_id", "score"}.issubset(df.columns):
+                        scores.append(df[["case_id", "score"]])
             if scores:
-                lut = pd.concat(scores, axis=0).drop_duplicates("case_id").set_index("case_id")["score"]
+                lut = pd.concat(scores).drop_duplicates("case_id").set_index("case_id")["score"]
             else:
                 lut = pd.Series(dtype=float)
             self._scores_lookup = lut
         return self._scores_lookup
 
     def score_case(self, case_id: str) -> Optional[float]:
-        # 1) realtime BVAE if available
-        if self._realtime is not None:
-            if case_id not in self.features_df.index:
-                return None
+        if self._realtime is not None and case_id in self.features_df.index:
             x = self.features_df.loc[[case_id]]
             keep = [c for c in self.feat_names if c in x.columns]
             if not keep:
@@ -223,29 +215,16 @@ class ScoreProvider:
             x = x[keep].values.astype(np.float32)
             x = (x - self.mu) / self.sd
             x = _safe_float_array(x)
-
             try:
                 with self._torch.no_grad():
                     inp = self._torch.from_numpy(x)
-                    out = self._realtime(inp)  # flexible output handling
-                    if isinstance(out, (tuple, list)) and len(out) >= 1:
-                        recon = out[0]
-                    elif isinstance(out, dict):
-                        for k in ("recon", "x_recon", "reconstruction", "x_hat"):
-                            if k in out:
-                                recon = out[k]; break
-                        else:
-                            recon = next(iter(out.values()))
-                    else:
-                        recon = out
-
+                    out = self._realtime(inp)
+                    recon = out[0] if isinstance(out, (tuple, list)) else out
                     recon_np = recon.detach().cpu().numpy() if hasattr(recon, "detach") else np.asarray(recon)
                     err = (recon_np - x) ** 2
                     return float(np.mean(err))
             except Exception:
                 pass
-
-        # 2) fallback: precomputed score lookup
         lut = self._load_scores_lookup()
         if case_id in lut.index:
             return float(lut.loc[case_id])
@@ -277,34 +256,16 @@ class StreamSimulator:
             self.active_cases[cid] = ts
             fired = self.rules.update(cid, act, ts)
             for code, t in fired:
-                self.flag_log.append({
-                    "time": t.isoformat(),
-                    "case_id": cid,
-                    "kind": "RULE",
-                    "rule": code,
-                    "score": np.nan,
-                })
+                self.flag_log.append({"time": t.isoformat(), "case_id": cid, "kind": "RULE", "rule": code, "score": np.nan})
             if cid in self.cases.index:
                 end_ts = self.cases.loc[cid, "end_ts"]
                 if pd.notna(end_ts) and ts >= end_ts and cid not in self.done_cases:
                     post = self.rules.finalize(cid, end_ts)
                     for code, t in post:
-                        self.flag_log.append({
-                            "time": t.isoformat(),
-                            "case_id": cid,
-                            "kind": "RULE",
-                            "rule": code,
-                            "score": np.nan,
-                        })
+                        self.flag_log.append({"time": t.isoformat(), "case_id": cid, "kind": "RULE", "rule": code, "score": np.nan})
                     s = self.scorer.score_case(cid)
                     if s is not None and s >= self.thr:
-                        self.flag_log.append({
-                            "time": ts.isoformat(),
-                            "case_id": cid,
-                            "kind": "ANOMALY",
-                            "rule": "",
-                            "score": float(s),
-                        })
+                        self.flag_log.append({"time": ts.isoformat(), "case_id": cid, "kind": "ANOMALY", "rule": "", "score": float(s)})
                     self.done_cases.add(cid)
                     self.rules.reset_case(cid)
                     self.active_cases.pop(cid, None)
@@ -313,8 +274,8 @@ class StreamSimulator:
     def stats(self) -> dict:
         window = pd.Timedelta(minutes=float(self.cfg["runtime"]["window_minutes"]))
         cutoff = self.now - window
-        inflight = {k:v for k,v in self.active_cases.items() if v >= cutoff}
-        log_df = pd.DataFrame(self.flag_log) if self.flag_log else pd.DataFrame(columns=["time","case_id","kind","rule","score"])
+        inflight = {k: v for k, v in self.active_cases.items() if v >= cutoff}
+        log_df = pd.DataFrame(self.flag_log) if self.flag_log else pd.DataFrame(columns=["time", "case_id", "kind", "rule", "score"])
         if not log_df.empty:
             log_df["time"] = pd.to_datetime(log_df["time"], utc=True)
             recent = log_df[log_df["time"] >= cutoff]
@@ -325,7 +286,5 @@ class StreamSimulator:
             "active_cases": int(len(inflight)),
             "recent_flags": int(len(recent)),
             "now": self.now,
-            "flags_df": log_df.sort_values("time", ascending=False).head(500)
+            "flags_df": log_df.sort_values("time", ascending=False).head(500),
         }
-
-
